@@ -1,0 +1,40 @@
+.function fib 
+  .args 1 
+  .vars 0
+  .stack 4
+
+    push_i32 1
+    put_loc 0 ; a = 1
+
+    push_i32 1
+    put_loc 1 ; b = 1
+
+    push_i32 0 
+    put_loc 2 ; i = 0
+
+loop:
+    get_loc 2 ; i
+    get_arg 0 ; n
+    push_i32 2
+    sub ; n - 2
+    
+    lt ; i < n - 2
+    if_false out
+
+    get_loc 1 ; b
+    put_loc 3 ; tmp = b
+
+    get_loc 0 ; a
+    get_loc 1 ; b
+    add
+    set_loc 1 ; b = a + b
+
+    get_loc 3 ; tmp
+    set_loc 0 ; a = tmp
+
+    inc_loc 2 ; i++
+    goto loop
+
+out:
+    get_loc 1 ; b
+    return
