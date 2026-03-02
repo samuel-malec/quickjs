@@ -39,10 +39,12 @@ int main(int argc, char *argv[]) {
     
     printf("Loaded %zu bytes from %s\n", size, filename);
     printf("Bytecode: ");
-    for ( size_t i = 0; i < len; ++i )
+    for ( size_t i = 0; i < size; ++i )
     {
-        
+        if ( i % 16 == 0 ) printf("\n ");
+        printf("%02x ", buf[ i ]);
     }
+
     JSRuntime *rt = JS_NewRuntime();
     JSContext *ctx = JS_NewContext( rt );
 
@@ -58,6 +60,7 @@ int main(int argc, char *argv[]) {
     js_std_add_helpers( ctx, 0, NULL );
 
     JSValue obj = JS_ReadObject( ctx, buf, size, JS_READ_OBJ_BYTECODE );
+    
     if ( JS_IsException( obj ) )
     {
         fprintf( stderr, "Failed to read bytecode\n" );
@@ -68,7 +71,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // The loaded object is a JSFunctionBytecode, evaluate it
     JSValue val = JS_EvalFunction( ctx, obj );
+    
     if ( JS_IsException( val ) )
     {
         fprintf( stderr, "Runtime exception:\n" );
@@ -77,6 +82,16 @@ int main(int argc, char *argv[]) {
         JS_FreeContext( ctx );
         JS_FreeRuntime( rt );
         return 1;
+    }
+
+    JSValue str_val = JS_ToString(ctx, val);
+    if (!JS_IsException(str_val)) {
+        const char *str = JS_ToCString(ctx, str_val);
+        if (str) {
+            printf("%s\n", str);
+            JS_FreeCString(ctx, str);
+        }
+        JS_FreeValue(ctx, str_val);
     }
 
     JS_FreeValue( ctx, val );

@@ -1,6 +1,6 @@
 .function fib 
   .args 1 
-  .vars 0
+  .vars 4
   .stack 4
 
     push_i32 1

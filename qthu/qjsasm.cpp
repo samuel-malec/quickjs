@@ -1,4 +1,5 @@
 #include "lexer.hpp"
+#include "encoder.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -10,9 +11,6 @@
 #include <map>
 #include <cctype>
 #include <cstring>
-
-using bytes = std::vector<uint8_t>;
-using sv_t = std::string_view;
 
 struct Config 
 {
@@ -45,45 +43,121 @@ std::map<std::string, OPCodeInfo> build_opcode_map()
     return opcode_map;
 }
 
-// Encode integer in little-endian
-void encode_u8(bytes& buf, uint8_t val) {
-    buf.push_back(val);
+struct FunctionMetadata {
+    std::string name = "main";
+    uint16_t arg_count = 0;
+    uint16_t var_count = 0;
+    uint16_t stack_size = 4;
+    bool strict_mode = true;
+};
+
+FunctionMetadata parse_metadata(const std::vector<Token>& tokens) {
+    FunctionMetadata meta;
+    
+    for (size_t i = 0; i < tokens.size(); i++) {
+        if (tokens[i].type == Token::DIRECTIVE) {
+            const std::string& directive = tokens[i].value;
+            
+            if (directive == ".function" && i + 1 < tokens.size()) {
+                i++;
+                if (tokens[i].type == Token::OPCODE || tokens[i].type == Token::LABEL) {
+                    meta.name = tokens[i].value;
+                }
+            } else if (directive == ".args" && i + 1 < tokens.size() && tokens[i + 1].type == Token::NUMBER) {
+                meta.arg_count = std::stoi(tokens[++i].value);
+            } else if ((directive == ".vars" || directive == ".locals") && i + 1 < tokens.size() && tokens[i + 1].type == Token::NUMBER) {
+                meta.var_count = std::stoi(tokens[++i].value);
+            } else if (directive == ".stack" && i + 1 < tokens.size() && tokens[i + 1].type == Token::NUMBER) {
+                meta.stack_size = std::stoi(tokens[++i].value);
+            } else if (directive == ".mode" && i + 1 < tokens.size()) {
+                i++;
+                if (tokens[i].value == "strict") {
+                    meta.strict_mode = true;
+                } else if (tokens[i].value == "sloppy") {
+                    meta.strict_mode = false;
+                }
+            }
+        }
+    }
+    
+    return meta;
 }
 
-void encode_i8(bytes& buf, int8_t val) {
-    buf.push_back(static_cast<uint8_t>(val));
-}
-
-void encode_u16(bytes& buf, uint16_t val) {
-    buf.push_back(val & 0xFF);
-    buf.push_back((val >> 8) & 0xFF);
-}
-
-void encode_i16(bytes& buf, int16_t val) {
-    encode_u16(buf, static_cast<uint16_t>(val));
-}
-
-void encode_u32(bytes& buf, uint32_t val) {
-    buf.push_back(val & 0xFF);
-    buf.push_back((val >> 8) & 0xFF);
-    buf.push_back((val >> 16) & 0xFF);
-    buf.push_back((val >> 24) & 0xFF);
-}
-
-void encode_i32(bytes& buf, int32_t val) {
-    encode_u32(buf, static_cast<uint32_t>(val));
+// Wrap bytecode body in QuickJS function format (following bcwriter.hpp structure)
+bytes wrap_function_bytecode(const bytes& bytecode_body, const FunctionMetadata& meta) {
+    bytes result;
+    
+    // Version byte
+    result.push_back(0x05); // BC_VERSION = 5
+    
+    // Atom table (atoms used in the function)
+    encode_leb128_u(result, 1); // atom count (just function name for now)
+    encode_string(result, meta.name); // atom string
+    
+    // Function bytecode tag
+    result.push_back(0x0c); // BC_TAG_FUNCTION_BYTECODE
+    
+    // Function header (following bcwriter.hpp order)
+    uint16_t flags = 0x0001; // Minimal flags for now (was 0x643 in bcwriter)
+    encode_u16(result, flags);
+    encode_u8(result, 1); // jsMode (1 = strict, matching flags)
+    
+    // Function metadata (all LEB128 encoded)
+    encode_atom(result, 0); // function name atom index
+    encode_leb128_u(result, meta.arg_count);
+    encode_leb128_u(result, meta.var_count); // Note: bcwriter uses locals.size() here
+    encode_leb128_u(result, meta.arg_count); // defined_arg_count
+    encode_leb128_u(result, meta.stack_size);
+    encode_leb128_u(result, 0); // var_ref_count
+    encode_leb128_i(result, 0); // closure_var_count (signed)
+    encode_leb128_i(result, 0); // cpool_count (signed)
+    encode_leb128_i(result, bytecode_body.size()); // byte_code_len (signed)
+    encode_leb128_i(result, meta.var_count + meta.arg_count); // local_count (signed)
+    
+    // Local variable definitions (args + locals)
+    // Each local needs: atom (leb128), scopeLevel (leb128), scopeNext (leb128), flags (u8)
+    // For args:
+    for (uint32_t i = 0; i < meta.arg_count; i++) {
+        encode_atom(result, 0); // atom (reuse function name for now)
+        encode_leb128_u(result, 0); // scopeLevel
+        encode_leb128_u(result, i + 1); // scopeNext
+        encode_u8(result, 0); // flags
+    }
+    
+    // For locals:
+    for (uint32_t i = 0; i < meta.var_count; i++) {
+        encode_atom(result, 0); // atom (reuse function name for now)
+        encode_leb128_u(result, 0); // scopeLevel
+        encode_leb128_u(result, meta.arg_count + i + 1); // scopeNext
+        encode_u8(result, 0); // flags
+    }
+    
+    // Closure variables would go here (if closure_var_count > 0)
+    
+    // Append bytecode
+    result.insert(result.end(), bytecode_body.begin(), bytecode_body.end());
+    
+    // Note: Debug info (filename, pc2line, source) should come here according to bcwriter.hpp
+    // but we're omitting it for now since our original version worked without it
+    
+    // Constant pool would go here (if cpool_count > 0)
+    
+    return result;
 }
 
 bytes assemble(const std::string& content) {
     auto tokens = tokenize(content);
     auto opcode_map = build_opcode_map();
     
-    bytes result;
+    // Parse metadata first
+    FunctionMetadata meta = parse_metadata(tokens);
+    
+    bytes bytecode_body;
     std::map<std::string, size_t> labels;
-    std::vector<std::tuple<size_t, std::string, std::string>> fixups; // offset, label, format
+    std::vector<std::tuple<size_t, std::string, std::string>> fixups;
     
     // First pass: collect labels and generate code
-    size_t pc = 0; // program counter
+    size_t pc = 0;
     size_t i = 0;
     
     while (i < tokens.size()) {
@@ -98,10 +172,11 @@ bytes assemble(const std::string& content) {
         }
         
         if (token.type == Token::DIRECTIVE) {
-            // Skip directives in first pass (they're for function metadata)
+            // Skip directives (already parsed)
             i++;
-            // Skip directive argument if present
-            if (i < tokens.size() && tokens[i].type == Token::NUMBER) {
+            if (i < tokens.size() && (tokens[i].type == Token::NUMBER || 
+                                      tokens[i].type == Token::OPCODE || 
+                                      tokens[i].type == Token::LABEL)) {
                 i++;
             }
             continue;
@@ -114,16 +189,16 @@ bytes assemble(const std::string& content) {
             }
             
             const auto& info = it->second;
-            result.push_back(info.opcode);
+            bytecode_body.push_back(info.opcode);
             pc++;
             
-            // Handle operands based on format
+            // Handle operands
             if (info.format != "none" && info.format != "none_int" && 
                 info.format != "none_loc" && info.format != "none_arg" && 
                 info.format != "none_var_ref" && info.format != "npopx" && 
                 info.format != "npop") {
                 
-                i++; // Move to operand token
+                i++;
                 if (i >= tokens.size() || (tokens[i].type != Token::NUMBER && tokens[i].type != Token::LABEL)) {
                     throw std::runtime_error("Missing operand for " + token.value + " at line " + std::to_string(token.line));
                 }
@@ -133,7 +208,7 @@ bytes assemble(const std::string& content) {
                 if (info.format == "i32" || info.format == "const") {
                     if (operand.type == Token::NUMBER) {
                         int32_t val = std::stoi(operand.value);
-                        encode_i32(result, val);
+                        encode_i32(bytecode_body, val);
                         pc += 4;
                     } else {
                         throw std::runtime_error("Expected number for " + info.format);
@@ -141,7 +216,7 @@ bytes assemble(const std::string& content) {
                 } else if (info.format == "u32") {
                     if (operand.type == Token::NUMBER) {
                         uint32_t val = std::stoul(operand.value);
-                        encode_u32(result, val);
+                        encode_u32(bytecode_body, val);
                         pc += 4;
                     } else {
                         throw std::runtime_error("Expected number for " + info.format);
@@ -151,7 +226,7 @@ bytes assemble(const std::string& content) {
                            info.format == "var_ref" || info.format == "npop_u16") {
                     if (operand.type == Token::NUMBER) {
                         int16_t val = std::stoi(operand.value);
-                        encode_i16(result, val);
+                        encode_i16(bytecode_body, val);
                         pc += 2;
                     } else {
                         throw std::runtime_error("Expected number for " + info.format);
@@ -160,22 +235,21 @@ bytes assemble(const std::string& content) {
                            info.format == "loc8" || info.format == "const8") {
                     if (operand.type == Token::NUMBER) {
                         int8_t val = std::stoi(operand.value);
-                        encode_i8(result, val);
+                        encode_i8(bytecode_body, val);
                         pc += 1;
                     } else {
                         throw std::runtime_error("Expected number for " + info.format);
                     }
                 } else if (info.format == "label" || info.format == "label16" || info.format == "label8") {
-                    // Record fixup for later
-                    size_t fixup_offset = result.size();
+                    size_t fixup_offset = bytecode_body.size();
                     if (info.format == "label") {
-                        encode_i32(result, 0); // placeholder
+                        encode_i32(bytecode_body, 0);
                         pc += 4;
                     } else if (info.format == "label16") {
-                        encode_i16(result, 0); // placeholder
+                        encode_i16(bytecode_body, 0);
                         pc += 2;
-                    } else { // label8
-                        encode_i8(result, 0); // placeholder
+                    } else {
+                        encode_i8(bytecode_body, 0);
                         pc += 1;
                     }
                     
@@ -203,19 +277,19 @@ bytes assemble(const std::string& content) {
         size_t target = it->second;
         
         if (format == "label") {
-            // Calculate relative offset from end of instruction
             int32_t rel = target - (offset + 4);
-            *reinterpret_cast<int32_t*>(&result[offset]) = rel;
+            *reinterpret_cast<int32_t*>(&bytecode_body[offset]) = rel;
         } else if (format == "label16") {
             int16_t rel = target - (offset + 2);
-            *reinterpret_cast<int16_t*>(&result[offset]) = rel;
+            *reinterpret_cast<int16_t*>(&bytecode_body[offset]) = rel;
         } else if (format == "label8") {
             int8_t rel = target - (offset + 1);
-            result[offset] = static_cast<uint8_t>(rel);
+            bytecode_body[offset] = static_cast<uint8_t>(rel);
         }
     }
     
-    return result;
+    // Wrap bytecode in function format
+    return wrap_function_bytecode(bytecode_body, meta);
 }
 
 Config parse_config( int argc, char* argv[] ) 
