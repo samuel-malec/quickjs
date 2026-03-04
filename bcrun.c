@@ -44,6 +44,7 @@ int main(int argc, char *argv[]) {
         if ( i % 16 == 0 ) printf("\n ");
         printf("%02x ", buf[ i ]);
     }
+    printf("\n=========================\n");
 
     JSRuntime *rt = JS_NewRuntime();
     JSContext *ctx = JS_NewContext( rt );
@@ -71,7 +72,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // The loaded object is a JSFunctionBytecode, evaluate it
+    // The loaded bytecode must be evaluated to execute as a module/script
+    // For functions with arguments, we need to wrap it or modify the format
+    // For now, this will call it with undefined arguments
     JSValue val = JS_EvalFunction( ctx, obj );
     
     if ( JS_IsException( val ) )
@@ -88,7 +91,7 @@ int main(int argc, char *argv[]) {
     if (!JS_IsException(str_val)) {
         const char *str = JS_ToCString(ctx, str_val);
         if (str) {
-            printf("%s\n", str);
+            printf("Returned value: %s\n", str);
             JS_FreeCString(ctx, str);
         }
         JS_FreeValue(ctx, str_val);
