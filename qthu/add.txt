@@ -1,6 +1,6 @@
 .function add
-    .vars 0
-    .stack 2
+    .locals 0
+    .stack_size 2
 
     push_i32 3
     push_i32 5

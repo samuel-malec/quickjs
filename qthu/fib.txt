@@ -1,7 +1,7 @@
 .function fib 
-  .args 1 
-  .vars 4
-  .stack 4
+  .args 0 
+  .locals 5
+  .stack_size 5
 
     push_i32 1
     put_loc 0 ; a = 1
@@ -12,9 +12,12 @@
     push_i32 0 
     put_loc 2 ; i = 0
 
+    push_i32 7
+    put_loc 3 ;
+
 loop:
     get_loc 2 ; i
-    get_arg 0 ; n
+    get_loc 3 ; n
     push_i32 2
     sub ; n - 2
     
@@ -22,15 +25,15 @@ loop:
     if_false out
 
     get_loc 1 ; b
-    put_loc 3 ; tmp = b
+    put_loc 4 ; tmp = b
 
     get_loc 0 ; a
     get_loc 1 ; b
     add
-    set_loc 1 ; b = a + b
+    put_loc 1 ; b = a + b
 
-    get_loc 3 ; tmp
-    set_loc 0 ; a = tmp
+    get_loc 4 ; tmp
+    put_loc 0 ; a = tmp
 
     inc_loc 2 ; i++
     goto loop
