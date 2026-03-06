@@ -26,7 +26,6 @@ int main( int argc, char *argv[] )
 
     const char *filename = argv[1];
     FILE *file = fopen(filename, "rb");
-
     if ( !file )
     {
         fprintf(stderr, "Error: Cannot open file '%s'\n", filename);
@@ -74,7 +73,7 @@ int main( int argc, char *argv[] )
     {
         fprintf( stderr, "Failed to read bytecode\n" );
         js_std_dump_error( ctx );
-        free(buf);
+        free( buf );
         JS_FreeContext( ctx );
         JS_FreeRuntime( rt );
         return 1;
@@ -85,20 +84,21 @@ int main( int argc, char *argv[] )
     {
         fprintf( stderr, "Runtime exception:\n" );
         js_std_dump_error( ctx );
-        free(buf);
+        free( buf );
         JS_FreeContext( ctx );
         JS_FreeRuntime( rt );
         return 1;
     }
 
-    JSValue str_val = JS_ToString(ctx, val);
-    if (!JS_IsException(str_val)) {
-        const char *str = JS_ToCString(ctx, str_val);
-        if (str) {
-            printf("Returned value: %s\n", str);
-            JS_FreeCString(ctx, str);
+    JSValue str_val = JS_ToString( ctx, val );
+    if ( !JS_IsException( str_val ) ) {
+        const char *str = JS_ToCString( ctx, str_val );
+        if ( str )
+        {
+            printf( "Returned value: %s\n", str );
+            JS_FreeCString( ctx, str );
         }
-        JS_FreeValue(ctx, str_val);
+        JS_FreeValue( ctx, str_val );
     }
 
     JS_FreeValue( ctx, val );

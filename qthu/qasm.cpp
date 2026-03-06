@@ -1,4 +1,5 @@
 #include "lexer.hpp"
+#include "opcodes.hpp"
 #include "encoder.hpp"
 
 #include <iostream>
@@ -7,6 +8,7 @@
 #include <string>
 #include <ios>
 #include <sstream>
+#include <string>
 #include <cstdint>
 #include <map>
 #include <cctype>
@@ -19,32 +21,6 @@ struct Config
     std::string file_out;
 };
 
-struct OPCodeInfo
-{
-    std::uint8_t opcode;
-    int size;
-    std::string format;
-};
-
-std::map< std::string, OPCodeInfo > build_opcode_map()
-{
-    std::map< std::string, OPCodeInfo > opcode_map;
-    uint8_t opcode_id = 0;
-    
-    #define SHORT_OPCODES 1
-    #define DEF(id, size, n_pop, n_push, f) \
-        opcode_map[ #id ] = OPCodeInfo{ opcode_id++, size, #f };
-    #define def(id, size, n_pop, n_push, f) 
-    
-    #include "../quickjs-opcode.h"
-    
-    #undef SHORT_OPCODES
-    #undef DEF
-    #undef def
-    
-    return opcode_map;
-}
-
 struct FunctionMetadata
 {
     std::string name = "main";
@@ -54,31 +30,34 @@ struct FunctionMetadata
     bool strict_mode = true;
 };
 
+struct CompiledFunction
+{
+    std::string name;
+    FunctionMetadata meta;
+    bytes bytecode;
+};
+
 FunctionMetadata parse_metadata( const std::vector< Token >& tokens, size_t& idx )
 {
     FunctionMetadata meta;
+    if ( idx >= tokens.size() || tokens[ idx ].cat != Token::FUNC_NAME )
+        throw std::runtime_error( "Expected function name after .function "  );
+
+    meta.name = tokens[ idx ].data;
+    idx++;
     
-    if ( idx < tokens.size() && 
-         (tokens[idx].cat == Token::OPCODE || 
-          tokens[idx].cat == Token::LABEL ||
-          tokens[idx].cat == Token::DIRECTIVE) )
+    while ( idx < tokens.size() && tokens[ idx ].cat == Token::DIRECTIVE )
     {
-        meta.name = tokens[idx].data;
-        idx++;
-    }
-    
-    while ( idx < tokens.size() && tokens[idx].cat == Token::DIRECTIVE )
-    {
-        std::string dir = tokens[idx].data;      
+        std::string dir = tokens[ idx ].data;      
         if ( dir == ".function" ) 
-            return meta;
+            throw std::runtime_error( "Function " + meta.name + " has empty body" );
         
         idx++; 
         if ( dir == ".args" || dir == ".locals" || dir == ".stack_size" )
         {
-            if ( idx < tokens.size() && tokens[idx].cat == Token::NUMBER )
+            if ( idx < tokens.size() && tokens[ idx ].cat == Token::NUMBER )
             {
-                uint16_t val = std::stoi( std::string( tokens[idx].data ) );
+                uint16_t val = std::stoi( std::string( tokens[ idx ].data ) );
                 if ( dir == ".args" ) meta.arg_count = val;
                 else if ( dir == ".locals" ) meta.var_count = val;
                 else if ( dir == ".stack_size" ) meta.stack_size = val;
@@ -90,12 +69,11 @@ FunctionMetadata parse_metadata( const std::vector< Token >& tokens, size_t& idx
     return meta;
 }
 
-struct CompiledFunction
+bool no_operands( std::string format )
 {
-    std::string name;
-    FunctionMetadata meta;
-    bytes bytecode;
-};
+    return format == "none" || format == "none_int" || format == "none_loc" || format == "none_arg" || 
+            format == "none_var_ref" || format == "npopx";  
+}
 
 bytes assemble_function( const std::vector< Token >& tokens,
                          size_t& token_idx, 
@@ -111,9 +89,10 @@ bytes assemble_function( const std::vector< Token >& tokens,
     {
         const auto& token = tokens[ token_idx ];
         if ( token.cat == Token::END ) break;
+
         if ( token.cat == Token::LABEL_DEF )
         {
-            labels[token.data] = pc;
+            labels[ token.data ] = pc;
             token_idx++;
             continue;
         }
@@ -135,98 +114,120 @@ bytes assemble_function( const std::vector< Token >& tokens,
             const auto& info = it->second;
             bytecode_body.push_back( info.opcode );
             pc++;
-            
-            // Handle operands
-            if ( info.format != "none" && info.format != "none_int" && 
-                info.format != "none_loc" && info.format != "none_arg" && 
-                info.format != "none_var_ref" && info.format != "npopx" ) {
-                
+             
+            if ( no_operands( info.format ) )
+            {
                 token_idx++;
-                if ( token_idx >= tokens.size() || ( tokens[ token_idx ].cat != Token::NUMBER 
-                    && tokens[ token_idx ].cat != Token::LABEL ) )
-                    throw std::runtime_error( "Missing operand for " + token.data + " at line " + std::to_string( token.loc.line ) + ", col " + std::to_string( token.loc.col ) );
-                
-                const auto& operand = tokens[ token_idx ];
-                if (info.format == "i32" || info.format == "const") {
-                    if (operand.cat == Token::NUMBER) {
-                        int32_t val = std::stoi(operand.data);
-                        encode_i32(bytecode_body, val);
-                        pc += 4;
-                    } else {
-                        throw std::runtime_error("Expected number for " + info.format);
-                    }
-                } else if (info.format == "u32") {
-                    if (operand.cat == Token::NUMBER) {
-                        uint32_t val = std::stoul(operand.data);
-                        encode_u32(bytecode_body, val);
-                        pc += 4;
-                    } else {
-                        throw std::runtime_error("Expected number for " + info.format);
-                    }
-                } else if (info.format == "i16" || info.format == "u16" || 
-                           info.format == "loc" || info.format == "arg" || 
-                           info.format == "var_ref" || info.format == "npop_u16" ||
-                           info.format == "npop") {
-                    if (operand.cat == Token::NUMBER) {
-                        int16_t val = std::stoi(operand.data);
-                        encode_i16(bytecode_body, val);
-                        pc += 2;
-                    } else {
-                        throw std::runtime_error("Expected number for " + info.format);
-                    }
-                } else if (info.format == "i8" || info.format == "u8" || 
-                           info.format == "loc8" || info.format == "const8") {
-                    if (operand.cat == Token::NUMBER) {
-                        int8_t val = std::stoi(operand.data);
-                        encode_i8(bytecode_body, val);
-                        pc += 1;
-                    } else {
-                        throw std::runtime_error("Expected number for " + info.format);
-                    }
-                } else if (info.format == "label" || info.format == "label16" || info.format == "label8") {
-                    size_t fixup_offset = bytecode_body.size();
-                    if (info.format == "label") {
-                        encode_i32(bytecode_body, 0);
-                        pc += 4;
-                    } else if (info.format == "label16") {
-                        encode_i16(bytecode_body, 0);
-                        pc += 2;
-                    } else {
-                        encode_i8(bytecode_body, 0);
-                        pc += 1;
-                    }
-                    
-                    if (operand.cat == Token::LABEL) {
-                        fixups.push_back({fixup_offset, operand.data, info.format});
-                    } else {
-                        throw std::runtime_error("Expected label for " + info.format);
-                    }
-                }
+                continue;
+            }
+
+            token_idx++;
+            if ( token_idx >= tokens.size() || ( tokens[ token_idx ].cat != Token::NUMBER 
+                && tokens[ token_idx ].cat != Token::LABEL ) )
+                throw std::runtime_error( "Missing operand for " + token.data + " at line " 
+                    + std::to_string( token.loc.line ) + ", col " + std::to_string( token.loc.col ) );
+            
+            const auto& operand = tokens[ token_idx ];
+            if ( info.format == "i32" || info.format == "const" )
+            {
+                if ( operand.cat == Token::NUMBER )
+                {
+                    int32_t val = std::stoi( operand.data );
+                    encode_i32( bytecode_body, val );
+                    pc += 4;
+                } 
+                else
+                    throw std::runtime_error( "Expected number for " + info.format );
+            } 
+            
+            else if ( info.format == "u32" )
+            {
+                if ( operand.cat == Token::NUMBER )
+                {
+                    uint32_t val = std::stoul( operand.data );
+                    encode_u32( bytecode_body, val );
+                    pc += 4;
+                } else
+                    throw std::runtime_error( "Expected number for " + info.format );
+            }
+
+            else if ( info.format == "i16" || info.format == "u16" || 
+                        info.format == "loc" || info.format == "arg" || 
+                        info.format == "var_ref" || info.format == "npop_u16" ||
+                        info.format == "npop" )
+            {
+                if ( operand.cat == Token::NUMBER )
+                {
+                    int16_t val = std::stoi( operand.data );
+                    encode_i16( bytecode_body, val );
+                    pc += 2;
+                } 
+                else
+                    throw std::runtime_error( "Expected number for " + info.format );
+            } 
+            
+            else if ( info.format == "i8" || info.format == "u8" || 
+                        info.format == "loc8" || info.format == "const8" )
+            {
+                if ( operand.cat == Token::NUMBER )
+                {
+                    int8_t val = std::stoi( operand.data );
+                    encode_i8( bytecode_body, val );
+                    pc += 1;
+                } else
+                    throw std::runtime_error( "Expected number for " + info.format );
             }
             
-            token_idx++;
-        } else {
-            token_idx++;
+            else if ( info.format == "label" || info.format == "label16" || info.format == "label8" )
+            {
+                size_t fixup_offset = bytecode_body.size();
+                if ( info.format == "label" )
+                {
+                    encode_i32( bytecode_body, 0 );
+                    pc += 4;
+                } 
+                else if ( info.format == "label16" )
+                {
+                    encode_i16( bytecode_body, 0 );
+                    pc += 2;
+                } 
+                else
+                {
+                    encode_i8( bytecode_body, 0 );
+                    pc += 1;
+                }
+                
+                if ( operand.cat == Token::LABEL ) 
+                    fixups.push_back( { fixup_offset, operand.data, info.format } );
+                else 
+                    throw std::runtime_error( "Expected label for " + info.format );
+            }
         }
+            
+        token_idx++;
     }
     
-    // Resolve labels
-    for (const auto& [offset, label, format] : fixups) {
-        auto it = labels.find(label);
-        if (it == labels.end()) {
-            throw std::runtime_error("Undefined label: " + label);
-        }
+    for ( const auto& [ offset, label, format ] : fixups )
+    {
+        auto it = labels.find( label );
+        if ( it == labels.end() )
+            throw std::runtime_error( "Undefined label: " + label );
         
         size_t target = it->second;
-        if (format == "label") {
+        if ( format == "label" )
+        {
             int32_t rel = target - offset;
-            *reinterpret_cast<int32_t*>(&bytecode_body[offset]) = rel;
-        } else if (format == "label16") {
+            *reinterpret_cast< int32_t* >( &bytecode_body[ offset ] ) = rel;
+        } 
+        else if ( format == "label16" )
+        {
             int16_t rel = target - offset;
-            *reinterpret_cast<int16_t*>(&bytecode_body[offset]) = rel;
-        } else if (format == "label8") {
+            *reinterpret_cast< int16_t* >( &bytecode_body[ offset ] ) = rel;
+        }
+        else if ( format == "label8" )
+        {
             int8_t rel = target - offset;
-            bytecode_body[offset] = static_cast<uint8_t>(rel);
+            bytecode_body[ offset ] = static_cast< uint8_t >( rel );
         }
     }
     
@@ -240,41 +241,33 @@ bytes wrap_function_bytecode( const bytes& bytecode_body,
     bytes result;
     result.push_back( 0x05 ); 
     
-    // Atom table (function name + constant pool function names)
     std::vector< std::string > atoms;
     atoms.push_back( meta.name );
     for ( const auto& func : cpool )
-    {
         atoms.push_back( func.name );
-    }
     
     encode_leb128_u( result, atoms.size() );
     for ( const auto& atom : atoms )
-    {
         encode_string( result, atom );
-    }
     
-    // Function bytecode tag
     result.push_back( 0x0c ); // BC_TAG_FUNCTION_BYTECODE
     
-    // Function header
+    // function header
     uint16_t flags = 0x0001;
     encode_u16( result, flags );
     encode_u8( result, 1 ); // jsMode
     
-    // Function metadata
-    encode_atom( result, 0 ); // function name atom index
+    encode_atom( result, 0 );
     encode_leb128_u( result, meta.arg_count );
     encode_leb128_u( result, meta.var_count );
-    encode_leb128_u( result, meta.arg_count ); // defined_arg_count
+    encode_leb128_u( result, meta.arg_count ); 
     encode_leb128_u( result, meta.stack_size );
-    encode_leb128_u( result, 0 ); // var_ref_count
-    encode_leb128_i( result, 0 ); // closure_var_count
-    encode_leb128_i( result, static_cast<int32_t>(cpool.size()) ); // cpool_count
-    encode_leb128_i( result, static_cast<int32_t>(bytecode_body.size()) ); // byte_code_len
-    encode_leb128_i( result, meta.var_count + meta.arg_count ); // local_count
+    encode_leb128_u( result, 0 ); 
+    encode_leb128_i( result, 0 ); 
+    encode_leb128_i( result, static_cast<int32_t>(cpool.size()) ); 
+    encode_leb128_i( result, static_cast<int32_t>(bytecode_body.size()) );
+    encode_leb128_i( result, meta.var_count + meta.arg_count ); 
     
-    // Local variable definitions (args + locals)
     for ( uint32_t i = 0; i < meta.arg_count; i++ ) 
     {
         encode_atom( result, 0 );
@@ -291,16 +284,14 @@ bytes wrap_function_bytecode( const bytes& bytecode_body,
         encode_u8( result, 0 );
     }
     
-    // Append bytecode
+    // function body
     result.insert( result.end(), bytecode_body.begin(), bytecode_body.end() );
     
-    // Constant pool - nested functions
     for ( size_t cpool_idx = 0; cpool_idx < cpool.size(); cpool_idx++ )
     {
         const auto& func = cpool[ cpool_idx ];
         
         result.push_back( 0x0c );
-        
         uint16_t nested_flags = 0x0001;
         encode_u16( result, nested_flags );
         encode_u8( result, 1 );
@@ -316,7 +307,7 @@ bytes wrap_function_bytecode( const bytes& bytecode_body,
         encode_leb128_i( result, static_cast<int32_t>(func.bytecode.size()) );
         encode_leb128_i( result, func.meta.var_count + func.meta.arg_count );
         
-        // Args
+        // args
         for ( uint32_t i = 0; i < func.meta.arg_count; i++ )
         {
             encode_atom( result, 0 );
@@ -325,7 +316,7 @@ bytes wrap_function_bytecode( const bytes& bytecode_body,
             encode_u8( result, 0 );
         }
         
-        // Locals
+        // locals
         for ( uint32_t i = 0; i < func.meta.var_count; i++)
         {
             encode_atom( result, 0 );
@@ -344,8 +335,6 @@ bytes assemble_file( const std::string& content )
 {
     Lexer lexer{ content };
     auto tokens = lexer.lex();
-    auto opcode_map = build_opcode_map();
-    
     std::vector< CompiledFunction > functions;
     size_t token_idx = 0;
     
@@ -357,7 +346,7 @@ bytes assemble_file( const std::string& content )
         {
             token_idx++; 
             FunctionMetadata meta = parse_metadata( tokens, token_idx );
-            bytes body = assemble_function( tokens, token_idx, meta, opcode_map );
+            bytes body = assemble_function( tokens, token_idx, meta, get_opcode_map() );
             functions.push_back( { meta.name, meta, body } );
         }
         else token_idx++;

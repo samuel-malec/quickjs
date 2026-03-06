@@ -6,7 +6,9 @@
 #include <cctype>
 #include <string_view>
 #include <cassert>
-
+#include <map>
+#include <cstdint>
+#include "opcodes.hpp"
 
 struct Location {
     int line;
@@ -15,7 +17,7 @@ struct Location {
 
 struct Token 
 {
-    enum Category { OPCODE, NUMBER, LABEL, LABEL_DEF, DIRECTIVE, COMMENT, END };
+    enum Category { OPCODE, FUNC_NAME, NUMBER, LABEL, LABEL_DEF, DIRECTIVE, COMMENT, END };
     Category cat;
     Location loc;
     std::string data;
@@ -48,7 +50,6 @@ struct Lexer
             return;
 
         char c = peek();
-
         if ( std::isspace( static_cast<unsigned char>( c ) ) )
         {
             advance();
@@ -68,7 +69,7 @@ struct Lexer
         while ( !is_end() )
         {
             char p = peek();
-            if ( std::isspace( static_cast<unsigned char>( p ) ) || p == ';' )
+            if ( std::isspace( static_cast< unsigned char >( p ) ) || p == ';' )
                 break;
             advance();
         }
@@ -79,7 +80,7 @@ struct Lexer
 
         if ( word.back() == ':' )
         {
-            add_token( Token::LABEL_DEF, start, ptr - 1 ); // exclude ':'
+            add_token( Token::LABEL_DEF, start, ptr - 1 );
             return;
         }
 
@@ -97,8 +98,10 @@ struct Lexer
 
         if ( should_be_label() )
             add_token( Token::LABEL, start, ptr );
-        else
+        else if ( get_opcode_set().count( std::string( word ) ) )
             add_token( Token::OPCODE, start, ptr );
+        else
+            add_token( Token::FUNC_NAME, start, ptr );
     }
 
     char peek() const 
