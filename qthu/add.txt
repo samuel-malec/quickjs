@@ -1,8 +1,0 @@
-.function add
-    .locals 0
-    .stack_size 2
-
-    push_i32 3
-    push_i32 5
-    add
-    return

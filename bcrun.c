@@ -4,51 +4,61 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int main(int argc, char *argv[]) {
-    if (argc < 2) {
+void print_bytecode( const uint8_t* bytecode, size_t size )
+{
+    printf( "Bytecode: " );
+    for ( size_t i = 0; i < size; ++i )
+    {
+        if ( i % 16 == 0 ) printf("\n ");
+        printf( "%02x ", buf[ i ] );
+    }
+    printf( "\n=========================\n" );
+}
+
+
+int main( int argc, char *argv[] )
+{
+    if ( argc < 2 )
+    {
         fprintf(stderr, "Usage: %s <bytecode_file>\n", argv[0]);
         return 1;
     }
 
     const char *filename = argv[1];
-    
     FILE *file = fopen(filename, "rb");
-    if (!file) {
+
+    if ( !file )
+    {
         fprintf(stderr, "Error: Cannot open file '%s'\n", filename);
         return 1;
     }
     
-    fseek(file, 0, SEEK_END);
-    size_t size = ftell(file);
-    fseek(file, 0, SEEK_SET);
+    fseek( file, 0, SEEK_END );
+    size_t size = ftell( file );
+    fseek( file, 0, SEEK_SET );
+    uint8_t *buf = malloc( size );
     
-    uint8_t *buf = malloc(size);
-    if (!buf) {
-        fprintf(stderr, "Error: Out of memory\n");
-        fclose(file);
-        return 1;
-    }
-    
-    if (fread(buf, 1, size, file) != size) {
-        fprintf(stderr, "Error: Failed to read file\n");
-        free(buf);
-        fclose(file);
-        return 1;
-    }
-    fclose(file);
-    
-    printf("Loaded %zu bytes from %s\n", size, filename);
-    printf("Bytecode: ");
-    for ( size_t i = 0; i < size; ++i )
+    if ( !buf ) 
     {
-        if ( i % 16 == 0 ) printf("\n ");
-        printf("%02x ", buf[ i ]);
+        fprintf( stderr, "Error: Out of memory\n" );
+        fclose( file );
+        return 1;
     }
-    printf("\n=========================\n");
+    
+    if ( fread( buf, 1, size, file ) != size )
+    {
+        fprintf( stderr, "Error: Failed to read file\n" );
+        free( buf );
+        fclose( file );
+        return 1;
+    }
 
+    fclose( file );
+    printf( "Loaded %zu bytes from %s\n", size, filename );
+    print_bytecode( buf, size );
     JSRuntime *rt = JS_NewRuntime();
     JSContext *ctx = JS_NewContext( rt );
-
+    
     if ( !rt || !ctx )
     {
         fprintf( stderr, "QuickJS init failed\n" );
@@ -59,9 +69,7 @@ int main(int argc, char *argv[]) {
     js_std_init_handlers( rt );
     JS_SetModuleLoaderFunc( rt, NULL, js_module_loader, NULL );
     js_std_add_helpers( ctx, 0, NULL );
-
     JSValue obj = JS_ReadObject( ctx, buf, size, JS_READ_OBJ_BYTECODE );
-    
     if ( JS_IsException( obj ) )
     {
         fprintf( stderr, "Failed to read bytecode\n" );
@@ -72,11 +80,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // The loaded bytecode must be evaluated to execute as a module/script
-    // For functions with arguments, we need to wrap it or modify the format
-    // For now, this will call it with undefined arguments
     JSValue val = JS_EvalFunction( ctx, obj );
-    
     if ( JS_IsException( val ) )
     {
         fprintf( stderr, "Runtime exception:\n" );

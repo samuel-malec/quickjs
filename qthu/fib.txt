@@ -1,43 +1,51 @@
-.function fib 
-  .args 0 
+.function main
+  .args 0
+  .locals 1
+  .stack_size 3
+
+    fclosure 0
+
+    push_i32 5  ; fib( 5 )
+    call 1
+
+    return
+
+.function fib
+  .args 1
   .locals 5
   .stack_size 5
 
     push_i32 1
-    put_loc 0 ; a = 1
+    put_loc 1
 
     push_i32 1
-    put_loc 1 ; b = 1
+    put_loc 2
 
-    push_i32 0 
-    put_loc 2 ; i = 0
-
-    push_i32 7
-    put_loc 3 ;
+    push_i32 0
+    put_loc 3
 
 loop:
-    get_loc 2 ; i
-    get_loc 3 ; n
+    get_loc 3
+    get_arg 0
     push_i32 2
-    sub ; n - 2
-    
-    lt ; i < n - 2
+    sub
+    lt
     if_false out
 
-    get_loc 1 ; b
-    put_loc 4 ; tmp = b
+    get_loc 2
+    put_loc 4
 
-    get_loc 0 ; a
-    get_loc 1 ; b
+    get_loc 1
+    get_loc 2
     add
-    put_loc 1 ; b = a + b
+    put_loc 2
 
-    get_loc 4 ; tmp
-    put_loc 0 ; a = tmp
+    get_loc 4
+    put_loc 1
 
-    inc_loc 2 ; i++
+    inc_loc 3
     goto loop
 
 out:
-    get_loc 1 ; b
+    get_loc 2
     return
